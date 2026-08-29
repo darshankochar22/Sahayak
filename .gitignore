@@ -1,0 +1,9 @@
+.DS_Store
+.idea/
+.vscode/
+server/.env
+server/.env.*
+server/firebase-service-account.json
+server/*service-account*.json
+server/credentials/
+server/api
