@@ -41,6 +41,11 @@ go build ./cmd/api
 
 ## Endpoints
 
+Complete documentation:
+
+- [`API.md`](API.md) — human-readable reference with examples and error codes
+- [`openapi.yaml`](openapi.yaml) — OpenAPI 3.1 specification for Swagger/Postman/client generation
+
 - `GET /health`
 - `POST /v1/auth/register`
 - `GET /v1/me`
