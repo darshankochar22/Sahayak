@@ -5,7 +5,11 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /sahayak-api ./cmd/api
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S app \
+    && adduser -S -G app app
 COPY --from=build /sahayak-api /sahayak-api
+USER app
 EXPOSE 8080
 ENTRYPOINT ["/sahayak-api"]

@@ -15,9 +15,15 @@ func (r Role) Valid() bool {
 
 type User struct {
 	ID          string    `json:"id"`
-	FirebaseUID string    `json:"-"`
 	PhoneNumber string    `json:"phoneNumber"`
 	Role        Role      `json:"role"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type UserCredentials struct {
+	User
+	PINHash        string
+	FailedAttempts int
+	LockedUntil    *time.Time
 }

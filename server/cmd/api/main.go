@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	firebase "firebase.google.com/go/v4"
 	"github.com/darshankochar22/sahayak/server/internal/api"
+	appauth "github.com/darshankochar22/sahayak/server/internal/auth"
 	"github.com/darshankochar22/sahayak/server/internal/config"
 	"github.com/darshankochar22/sahayak/server/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,18 +32,11 @@ func main() {
 		log.Fatalf("ping database: %v", err)
 	}
 
-	firebaseApp, err := firebase.NewApp(ctx, nil)
-	if err != nil {
-		log.Fatalf("initialize firebase: %v", err)
-	}
-	authClient, err := firebaseApp.Auth(ctx)
-	if err != nil {
-		log.Fatalf("initialize firebase auth: %v", err)
-	}
-
+	userStore := store.NewPostgresUserStore(db)
+	authService := appauth.NewService(userStore, store.NewPostgresSessionStore(db), cfg.PINPepper, cfg.JWTSecret)
 	handler := api.NewWithPayments(
-		authClient,
-		store.NewPostgresUserStore(db),
+		authService,
+		userStore,
 		store.NewPostgresPaymentStore(db),
 		cfg.AllowedOrigin,
 	)

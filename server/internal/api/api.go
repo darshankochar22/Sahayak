@@ -8,51 +8,152 @@ import (
 	"net/http"
 	"strings"
 
-	firebaseauth "firebase.google.com/go/v4/auth"
+	appauth "github.com/darshankochar22/sahayak/server/internal/auth"
 	"github.com/darshankochar22/sahayak/server/internal/domain"
 	"github.com/darshankochar22/sahayak/server/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-type TokenVerifier interface {
-	VerifyIDToken(ctx context.Context, idToken string) (*firebaseauth.Token, error)
+type Authenticator interface {
+	Register(context.Context, string, string, domain.Role) (appauth.Result, error)
+	Login(context.Context, string, string) (appauth.Result, error)
+	Refresh(context.Context, string) (appauth.Result, error)
+	Logout(context.Context, string) error
+	VerifyAccess(string) (string, error)
 }
 
 type Handler struct {
-	auth          TokenVerifier
+	auth          Authenticator
 	users         store.UserStore
 	payments      store.PaymentStore
 	allowedOrigin string
 }
-
-type principal struct {
-	UID   string
-	Phone string
-}
-
+type principal struct{ UserID string }
 type contextKey string
 
 const principalKey contextKey = "principal"
 
-func New(auth TokenVerifier, users store.UserStore, allowedOrigin string) *Handler {
+func New(auth Authenticator, users store.UserStore, allowedOrigin string) *Handler {
 	return &Handler{auth: auth, users: users, allowedOrigin: allowedOrigin}
 }
-
-func NewWithPayments(auth TokenVerifier, users store.UserStore, payments store.PaymentStore, allowedOrigin string) *Handler {
+func NewWithPayments(auth Authenticator, users store.UserStore, payments store.PaymentStore, allowedOrigin string) *Handler {
 	return &Handler{auth: auth, users: users, payments: payments, allowedOrigin: allowedOrigin}
 }
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.health)
-	mux.Handle("POST /v1/auth/register", h.requireFirebaseToken(http.HandlerFunc(h.register)))
-	mux.Handle("GET /v1/me", h.requireFirebaseToken(http.HandlerFunc(h.me)))
+	mux.HandleFunc("POST /v1/auth/register", h.register)
+	mux.HandleFunc("POST /v1/auth/login", h.login)
+	mux.HandleFunc("POST /v1/auth/refresh", h.refresh)
+	mux.HandleFunc("POST /v1/auth/logout", h.logout)
+	mux.Handle("GET /v1/me", h.requireAccessToken(http.HandlerFunc(h.me)))
 	if h.payments != nil {
-		mux.Handle("GET /v1/jobs/{jobID}/payment", h.requireFirebaseToken(http.HandlerFunc(h.getPayment)))
-		mux.Handle("POST /v1/jobs/{jobID}/payment/mark-paid", h.requireFirebaseToken(http.HandlerFunc(h.markPaymentPaid)))
+		mux.Handle("GET /v1/jobs/{jobID}/payment", h.requireAccessToken(http.HandlerFunc(h.getPayment)))
+		mux.Handle("POST /v1/jobs/{jobID}/payment/mark-paid", h.requireAccessToken(http.HandlerFunc(h.markPaymentPaid)))
 	}
 	return h.cors(mux)
+}
+
+func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PhoneNumber string      `json:"phoneNumber"`
+		PIN         string      `json:"pin"`
+		Role        domain.Role `json:"role"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	result, err := h.auth.Register(r.Context(), body.PhoneNumber, body.PIN, body.Role)
+	if errors.Is(err, appauth.ErrInvalidInput) {
+		writeError(w, http.StatusBadRequest, "INVALID_REGISTRATION", "enter a valid Indian phone number, four-digit PIN, and role")
+		return
+	}
+	if errors.Is(err, store.ErrPhoneExists) {
+		writeError(w, http.StatusConflict, "PHONE_ALREADY_REGISTERED", "phone number is already registered")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "REGISTRATION_FAILED", "could not create account")
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PhoneNumber string `json:"phoneNumber"`
+		PIN         string `json:"pin"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	result, err := h.auth.Login(r.Context(), body.PhoneNumber, body.PIN)
+	var locked *appauth.AccountLockedError
+	if errors.As(err, &locked) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"code": "ACCOUNT_LOCKED", "message": "too many incorrect attempts; try again later", "retryAt": locked.Until}})
+		return
+	}
+	if errors.Is(err, appauth.ErrInvalidCredentials) {
+		writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "phone number or PIN is incorrect")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LOGIN_FAILED", "could not log in")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	result, err := h.auth.Refresh(r.Context(), body.RefreshToken)
+	if errors.Is(err, store.ErrSessionInvalid) {
+		writeError(w, http.StatusUnauthorized, "SESSION_INVALID", "session is invalid or expired")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "SESSION_REFRESH_FAILED", "could not refresh session")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := h.auth.Logout(r.Context(), body.RefreshToken); err != nil && !errors.Is(err, store.ErrSessionInvalid) {
+		writeError(w, http.StatusInternalServerError, "LOGOUT_FAILED", "could not log out")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	user, err := h.users.ByID(r.Context(), currentUserID(r))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "PROFILE_NOT_FOUND", "account was not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "USER_READ_FAILED", "could not load user profile")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
 }
 
 func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
@@ -60,8 +161,7 @@ func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := r.Context().Value(principalKey).(principal)
-	payment, err := h.payments.ByJob(r.Context(), p.UID, jobID)
+	payment, err := h.payments.ByJob(r.Context(), currentUserID(r), jobID)
 	if errors.Is(err, store.ErrPaymentNotFound) {
 		writeError(w, http.StatusNotFound, "PAYMENT_NOT_FOUND", "payment was not found")
 		return
@@ -78,8 +178,7 @@ func (h *Handler) markPaymentPaid(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := r.Context().Value(principalKey).(principal)
-	payment, err := h.payments.MarkPaidOffline(r.Context(), p.UID, jobID)
+	payment, err := h.payments.MarkPaidOffline(r.Context(), currentUserID(r), jobID)
 	if errors.Is(err, store.ErrPaymentNotFound) {
 		writeError(w, http.StatusNotFound, "PAYMENT_NOT_FOUND", "payment was not found or does not belong to this Hirer")
 		return
@@ -91,6 +190,8 @@ func (h *Handler) markPaymentPaid(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payment)
 }
 
+func currentUserID(r *http.Request) string { return r.Context().Value(principalKey).(principal).UserID }
+
 func validJobID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	jobID := r.PathValue("jobID")
 	if _, err := uuid.Parse(jobID); err != nil {
@@ -100,73 +201,35 @@ func validJobID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return jobID, true
 }
 
-func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
-	var body struct {
-		Role domain.Role `json:"role"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil || !body.Role.Valid() {
-		writeError(w, http.StatusBadRequest, "INVALID_ROLE", "role must be HIRER or LABOURER")
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "INVALID_ROLE", "role must be HIRER or LABOURER")
-		return
-	}
-
-	p := r.Context().Value(principalKey).(principal)
-	user, err := h.users.Upsert(r.Context(), p.UID, p.Phone, body.Role)
-	if errors.Is(err, store.ErrRoleConflict) {
-		writeError(w, http.StatusConflict, "ROLE_CONFLICT", "this account is already registered with a different role")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "USER_SAVE_FAILED", "could not save user profile")
-		return
-	}
-	writeJSON(w, http.StatusOK, user)
-}
-
-func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
-	p := r.Context().Value(principalKey).(principal)
-	user, err := h.users.ByFirebaseUID(r.Context(), p.UID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "PROFILE_NOT_FOUND", "choose a role to finish registration")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "USER_READ_FAILED", "could not load user profile")
-		return
-	}
-	writeJSON(w, http.StatusOK, user)
-}
-
-func (h *Handler) requireFirebaseToken(next http.Handler) http.Handler {
+func (h *Handler) requireAccessToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
 		if !strings.HasPrefix(header, "Bearer ") {
-			writeError(w, http.StatusUnauthorized, "TOKEN_REQUIRED", "Firebase ID token is required")
+			writeError(w, http.StatusUnauthorized, "TOKEN_REQUIRED", "access token is required")
 			return
 		}
-		token, err := h.auth.VerifyIDToken(r.Context(), strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")))
-		if err != nil || token == nil || token.UID == "" {
-			writeError(w, http.StatusUnauthorized, "TOKEN_INVALID", "Firebase ID token is invalid or expired")
+		userID, err := h.auth.VerifyAccess(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")))
+		if err != nil || userID == "" {
+			writeError(w, http.StatusUnauthorized, "TOKEN_INVALID", "access token is invalid or expired")
 			return
 		}
-		phone, _ := token.Claims["phone_number"].(string)
-		if phone == "" {
-			writeError(w, http.StatusForbidden, "PHONE_REQUIRED", "account must be authenticated by phone number")
-			return
-		}
-		ctx := context.WithValue(r.Context(), principalKey, principal{UID: token.UID, Phone: phone})
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, principal{UserID: userID})))
 	})
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, value any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 2048)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "request body is invalid")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "request body is invalid")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) cors(next http.Handler) http.Handler {
@@ -187,7 +250,6 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
-
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }

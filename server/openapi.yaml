@@ -1,323 +1,161 @@
 openapi: 3.1.0
 info:
   title: Sahayak API
-  version: 0.1.0
-  license:
-    name: Proprietary
-    url: https://github.com/darshankochar22/Sahayak
-  description: |
-    Backend API for Sahayak. Firebase phone OTP happens in the mobile app;
-    protected endpoints verify the resulting Firebase ID token. Payments are
-    offline records only and no money is processed by this API.
+  version: 1.0.0
+  description: PIN-authenticated API for hirers and labourers. Phone ownership is not verified.
 servers:
-  - url: /
-    description: Current API host
-tags:
-  - name: System
-    description: Service health and operational endpoints.
-  - name: Authentication
-    description: Sahayak registration after Firebase phone authentication.
-  - name: Profile
-    description: Authenticated Sahayak account information.
-  - name: Offline payments
-    description: Records of payments completed outside Sahayak.
+  - url: http://localhost:8080
 paths:
   /health:
     get:
-      tags: [System]
-      summary: Check HTTP service health
-      operationId: getHealth
-      security: []
+      operationId: health
       responses:
-        "200":
-          description: Service process is running.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthResponse"
-              example:
-                status: ok
-        "405":
-          description: HTTP method is not allowed for this path.
+        "200": {description: Healthy, content: {application/json: {schema: {$ref: "#/components/schemas/Health"}}}}
   /v1/auth/register:
     post:
-      tags: [Authentication]
-      summary: Register a phone-authenticated Sahayak profile
-      description: Role is fixed after registration. Repeating the same role is idempotent.
-      operationId: registerUser
+      operationId: register
       requestBody:
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RegisterRequest"
-            examples:
-              hirer:
-                value: {role: HIRER}
-              labourer:
-                value: {role: LABOURER}
+        content: {application/json: {schema: {$ref: "#/components/schemas/RegisterRequest"}}}
       responses:
-        "200":
-          description: Profile created or existing same-role profile returned.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "400":
-          $ref: "#/components/responses/InvalidRole"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/PhoneRequired"
-        "409":
-          $ref: "#/components/responses/RoleConflict"
-        "500":
-          $ref: "#/components/responses/InternalError"
+        "201": {$ref: "#/components/responses/AuthSuccess"}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/LoginRequest"}}}
+      responses:
+        "200": {$ref: "#/components/responses/AuthSuccess"}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/RefreshRequest"}}}
+      responses:
+        "200": {$ref: "#/components/responses/AuthSuccess"}
+        "401": {$ref: "#/components/responses/Error"}
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/RefreshRequest"}}}
+      responses:
+        "204": {description: Session revoked}
   /v1/me:
     get:
-      tags: [Profile]
-      summary: Get the authenticated Sahayak profile
-      operationId: getCurrentUser
+      operationId: getMe
+      security: [{accessBearer: []}]
       responses:
-        "200":
-          description: Authenticated profile.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/PhoneRequired"
-        "404":
-          description: Firebase account has not completed Sahayak registration.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error:
-                  code: PROFILE_NOT_FOUND
-                  message: choose a role to finish registration
-        "500":
-          $ref: "#/components/responses/InternalError"
+        "200": {description: Current user, content: {application/json: {schema: {$ref: "#/components/schemas/User"}}}}
+        "401": {$ref: "#/components/responses/Error"}
   /v1/jobs/{jobId}/payment:
-    parameters:
-      - $ref: "#/components/parameters/JobID"
+    parameters: [{$ref: "#/components/parameters/JobID"}]
     get:
-      tags: [Offline payments]
-      summary: Get a job's offline-payment record
-      description: Available only for a job owned by the authenticated Hirer.
       operationId: getJobPayment
+      security: [{accessBearer: []}]
       responses:
-        "200":
-          description: Offline-payment record.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Payment"
-        "400":
-          $ref: "#/components/responses/InvalidJobID"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/PhoneRequired"
-        "404":
-          $ref: "#/components/responses/PaymentNotFound"
-        "500":
-          $ref: "#/components/responses/InternalError"
+        "200": {description: Payment, content: {application/json: {schema: {$ref: "#/components/schemas/Payment"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
   /v1/jobs/{jobId}/payment/mark-paid:
-    parameters:
-      - $ref: "#/components/parameters/JobID"
+    parameters: [{$ref: "#/components/parameters/JobID"}]
     post:
-      tags: [Offline payments]
-      summary: Mark a job payment as paid offline
-      description: |
-        The owning Hirer records an external payment. No money is processed.
-        The operation is idempotent and preserves the original paidAt time.
-      operationId: markJobPaymentPaidOffline
+      operationId: markJobPaymentPaid
+      security: [{accessBearer: []}]
       responses:
-        "200":
-          description: Payment is marked PAID_OFFLINE.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Payment"
-        "400":
-          $ref: "#/components/responses/InvalidJobID"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/PhoneRequired"
-        "404":
-          $ref: "#/components/responses/PaymentNotFound"
-        "500":
-          $ref: "#/components/responses/InternalError"
+        "200": {description: Updated payment, content: {application/json: {schema: {$ref: "#/components/schemas/Payment"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
 components:
   securitySchemes:
-    firebaseBearer:
-      type: http
-      scheme: bearer
-      bearerFormat: Firebase ID token
-      description: Firebase ID token issued after successful phone OTP authentication.
+    accessBearer: {type: http, scheme: bearer, bearerFormat: JWT}
   parameters:
-    JobID:
-      name: jobId
-      in: path
-      required: true
-      description: Unloading job UUID.
-      schema:
-        type: string
-        format: uuid
+    JobID: {name: jobId, in: path, required: true, schema: {type: string, format: uuid}}
+  responses:
+    AuthSuccess:
+      description: Authenticated session
+      content: {application/json: {schema: {$ref: "#/components/schemas/AuthResponse"}}}
+    Error:
+      description: Error response
+      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
   schemas:
-    Role:
+    Health:
+      type: object
+      required: [status]
+      properties: {status: {type: string, const: ok}}
+    Role: {type: string, enum: [HIRER, LABOURER]}
+    Phone:
       type: string
-      enum: [HIRER, LABOURER]
-    PaymentStatus:
+      pattern: '^\+91[6-9][0-9]{9}$'
+    Pin:
       type: string
-      enum: [PENDING, PAID_OFFLINE]
+      pattern: '^[0-9]{4}$'
     RegisterRequest:
       type: object
       additionalProperties: false
-      required: [role]
+      required: [phoneNumber, pin, role]
       properties:
-        role:
-          $ref: "#/components/schemas/Role"
+        phoneNumber: {type: string}
+        pin: {$ref: "#/components/schemas/Pin"}
+        role: {$ref: "#/components/schemas/Role"}
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [phoneNumber, pin]
+      properties:
+        phoneNumber: {type: string}
+        pin: {$ref: "#/components/schemas/Pin"}
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties: {refreshToken: {type: string, minLength: 1}}
     User:
       type: object
-      additionalProperties: false
       required: [id, phoneNumber, role, createdAt, updatedAt]
       properties:
-        id:
-          type: string
-          format: uuid
-        phoneNumber:
-          type: string
-          description: E.164 phone number from the verified Firebase token.
-          example: "+919876543210"
-        role:
-          $ref: "#/components/schemas/Role"
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
+        id: {type: string, format: uuid}
+        phoneNumber: {$ref: "#/components/schemas/Phone"}
+        role: {$ref: "#/components/schemas/Role"}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    AuthResponse:
+      type: object
+      required: [user, accessToken, refreshToken, expiresIn]
+      properties:
+        user: {$ref: "#/components/schemas/User"}
+        accessToken: {type: string}
+        refreshToken: {type: string}
+        expiresIn: {type: integer, const: 900}
     Payment:
       type: object
-      additionalProperties: false
-      required: [id, jobId, amountPaise, currency, status, paidAt, createdAt, updatedAt]
+      required: [id, jobId, amountPaise, currency, status, createdAt, updatedAt]
       properties:
-        id:
-          type: string
-          format: uuid
-        jobId:
-          type: string
-          format: uuid
-        amountPaise:
-          type: integer
-          format: int64
-          minimum: 1
-          example: 90000
-        currency:
-          type: string
-          const: INR
-        status:
-          $ref: "#/components/schemas/PaymentStatus"
-        paidAt:
-          oneOf:
-            - type: string
-              format: date-time
-            - type: "null"
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-    HealthResponse:
-      type: object
-      additionalProperties: false
-      required: [status]
-      properties:
-        status:
-          type: string
-          const: ok
-    ErrorDetail:
-      type: object
-      additionalProperties: false
-      required: [code, message]
-      properties:
-        code:
-          type: string
-        message:
-          type: string
+        id: {type: string, format: uuid}
+        jobId: {type: string, format: uuid}
+        amountPaise: {type: integer, format: int64, minimum: 1}
+        currency: {type: string, const: INR}
+        status: {type: string, enum: [PENDING, PAID_OFFLINE]}
+        paidAt: {type: [string, "null"], format: date-time}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
     ErrorResponse:
       type: object
-      additionalProperties: false
       required: [error]
       properties:
         error:
-          $ref: "#/components/schemas/ErrorDetail"
-  responses:
-    Unauthorized:
-      description: Firebase token is missing, invalid, or expired.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          examples:
-            required:
-              value:
-                error: {code: TOKEN_REQUIRED, message: Firebase ID token is required}
-            invalid:
-              value:
-                error: {code: TOKEN_INVALID, message: Firebase ID token is invalid or expired}
-    PhoneRequired:
-      description: Firebase account is not authenticated through a phone number.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          example:
-            error: {code: PHONE_REQUIRED, message: account must be authenticated by phone number}
-    InvalidRole:
-      description: Registration body or role is invalid.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          example:
-            error: {code: INVALID_ROLE, message: role must be HIRER or LABOURER}
-    RoleConflict:
-      description: Existing account is registered with the opposite role.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          example:
-            error: {code: ROLE_CONFLICT, message: this account is already registered with a different role}
-    InvalidJobID:
-      description: Job identifier is not a UUID.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          example:
-            error: {code: INVALID_JOB_ID, message: job ID must be a valid UUID}
-    PaymentNotFound:
-      description: Payment does not exist or is not visible to this Hirer.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          example:
-            error: {code: PAYMENT_NOT_FOUND, message: payment was not found}
-    InternalError:
-      description: An internal storage operation failed.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-security:
-  - firebaseBearer: []
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            retryAt: {type: string, format: date-time}

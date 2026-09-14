@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sahayak
+      POSTGRES_USER: sahayak
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in server/.env}
+    volumes:
+      - sahayak_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sahayak -d sahayak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: migrate/migrate:v4.18.3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command: ["-path", "/migrations", "-database", "postgres://sahayak:${POSTGRES_PASSWORD}@postgres:5432/sahayak?sslmode=disable", "up"]
+    restart: "no"
+
+  api:
+    build: .
+    image: sahayak-api:local
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PORT: "8080"
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      DATABASE_URL: postgres://sahayak:${POSTGRES_PASSWORD}@postgres:5432/sahayak?sslmode=disable
+      PIN_PEPPER: ${PIN_PEPPER:?set PIN_PEPPER in server/.env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in server/.env}
+    ports:
+      - "${API_PORT:-8080}:8080"
+
+volumes:
+  sahayak_postgres_data:

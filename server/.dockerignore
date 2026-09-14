@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+*.json
+secrets/
+.git/
+.gitignore
+coverage.out
+bin/
+/api
