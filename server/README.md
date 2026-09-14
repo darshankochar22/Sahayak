@@ -35,6 +35,8 @@ Migration `000003` intentionally clears development users, jobs, and payments wh
 
 ## Run with Docker
 
+For native Windows Server deployment without Docker, see [WINDOWS_DEPLOYMENT.md](WINDOWS_DEPLOYMENT.md).
+
 From `server/`, create `.env` with `POSTGRES_PASSWORD`, `PIN_PEPPER`, and `JWT_SECRET` set to the separately generated values above. Optionally set `API_PORT=8080` and `ALLOWED_ORIGIN=*`. Environment examples are intentionally not distributed in Git.
 
 ```sh

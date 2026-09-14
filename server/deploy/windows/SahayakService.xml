@@ -1,0 +1,19 @@
+<service>
+  <id>SahayakAPI</id>
+  <name>Sahayak API</name>
+  <description>Sahayak phone/PIN API. PostgreSQL must be configured separately.</description>
+  <executable>%BASE%\sahayak-api.exe</executable>
+  <workingdirectory>%BASE%</workingdirectory>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart/>
+  <stoptimeout>20sec</stoptimeout>
+  <onfailure action="restart" delay="30sec"/>
+  <serviceaccount>
+    <username>NT AUTHORITY\LocalService</username>
+  </serviceaccount>
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>

@@ -7,3 +7,4 @@ server/firebase-service-account.json
 server/*service-account*.json
 server/credentials/
 server/api
+server/dist/
